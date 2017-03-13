@@ -46,20 +46,19 @@ CacheInfo struct for docs on what's inside it. Have a look at dump_cache_info
 for an example of how to check the members. */
 static CacheInfo icache_info;
 static CacheInfo dcache_info[3];
+static CacheSetup icache_setup, dcache_setup[3];
+static CacheStats icache_stats, dcache_stats[3];
 
 CacheBlock** icache;
-unsigned int tag;
-int word_index, row_index, col_index;
-int num_rows, num_cols;
+CacheBlock** dcache;
+CacheBlock** dcache2;
+CacheBlock** dcache3;
 
-int tag_bits, row_bits, word_bits, byte_bits;
-int word_shift, row_shift, tag_shift;
-int word_mask, row_mask, tag_mask;
+unsigned int tag_I, tag_D[3];
+int word_index_I, row_index_I, col_index_I;
+int word_index_D[3], row_index_D[3], col_index_D[3];
 
-int num_reads=0 , words_read_mem=0, num_writes=0, words_write_mem=0;
-int compulsory_reads=0, conflict_reads=0, capacity_reads=0;
-int total_misses=0;
-double miss_rate=0;
+
 /* power_of_two - returns what power n is with a base 2 */
 int power_of_two(int n)
 {
@@ -75,151 +74,654 @@ int power_of_two(int n)
   }
   return count;
 }
-int binary_to_decimal(int binary) {
-	int decimal = 0, base = 0, remainder;
-	while (binary > 0)
-  {
-        remainder = binary % 10;
-				decimal += remainder * base;
-        binary /= 10;
-        base *= 2;
-  }
-	return decimal;
-}
+/* Updates a given block to MRU and increments age of all other blocks in icache */
 void updateAge(int col)
 {
   /* Update LRU ages */
   if(icache_info.replacement == Replacement_LRU)
   {
-    icache[row_index][col].LRU_age = 1;
+    icache[row_index_I][col].LRU_age = 1;
     int j;
-    for(j = 0; j < num_cols; j++)
+    for(j = 0; j < icache_setup.num_cols; j++)
     {
-      if(icache[row_index][j].LRU_age == 0)
+      if(icache[row_index_I][j].LRU_age == 0)
       {
         /* This block and the rest have not been used yet */
         break;
       }
       else if(j != col)
       {
-        icache[row_index][j].LRU_age++;
+        icache[row_index_I][j].LRU_age++;
       }
     }
   }
 }
+/* Updates a given block to MRU and increments age of all other blocks in dcache */
+void updateAgeD(int col, int level, CacheBlock** cache)
+{
+  /* Update LRU ages */
+  if(dcache_info[level].replacement == Replacement_LRU)
+  {
+    cache[row_index_D[level]][col].LRU_age = 1;
+    int j;
+    for(j = 0; j < dcache_setup[level].num_cols; j++)
+    {
+      if(cache[row_index_D[level]][j].LRU_age == 0)
+      {
+        /* This block and the rest have not been used yet */
+        break;
+      }
+      else if(j != col)
+      {
+        cache[row_index_D[level]][j].LRU_age++;
+      }
+    }
+  }
+}
+/* Calculates number of bits used for word, row, and tag and then uses that to
+  calculate the shift and mask amounts for picking apart the address */
+void setup_cache(CacheInfo i, CacheSetup* s)
+{
+  int tag_bits, row_bits, word_bits, byte_bits;
+  s->num_rows = i.num_blocks/i.associativity;
+  s->num_cols = i.associativity;
+  /* Number of bits for each part of the address */
+	byte_bits = 2;
+	word_bits = power_of_two(i.words_per_block);
+	row_bits = power_of_two(s->num_rows);
+	tag_bits = 32 - byte_bits - word_bits - row_bits;
+  /* Calculate shift and mask  */
+	s->word_shift = byte_bits;
+	s->row_shift = byte_bits + word_bits;
+	s->tag_shift = byte_bits + word_bits + row_bits;
+	s->word_mask = (1 << word_bits) - 1;
+	s->row_mask = (1 << row_bits) - 1;
+	s->tag_mask = (1 << tag_bits) - 1;
+}
+
 void setup_caches()
 {
 	/* Setting up my caches here! */
-	/* Number of bits for each part of the address */
-	byte_bits = 2;
-	word_bits = power_of_two(icache_info.words_per_block);
-	num_rows = icache_info.num_blocks/icache_info.associativity;
-  num_cols = icache_info.associativity;
-	row_bits = power_of_two(num_rows);
-	tag_bits = 32 - byte_bits - word_bits - row_bits;
-	/* Calculate shift and mask  */
-	word_shift = byte_bits;
-	row_shift = byte_bits + word_bits;
-	tag_shift = byte_bits + word_bits + row_bits;
-	word_mask = (1 << word_bits) - 1;
-	row_mask = (1 << row_bits) - 1;
-	tag_mask = (1 << tag_bits) - 1;
-  /* Allocate memory for cache array */
-  icache = calloc(sizeof(void*), num_rows);
-	int x, y;
-	for (x = 0; x < num_rows; x++)
+	setup_cache(icache_info, &icache_setup);
+
+  /* Allocate memory for i-cache array */
+  icache = calloc(sizeof(void*), icache_setup.num_rows);
+  int x, y;
+  for (x = 0; x < icache_setup.num_rows; x++)
   {
-    icache[x] = calloc(sizeof(CacheBlock), num_cols);
+    icache[x] = calloc(sizeof(CacheBlock), icache_setup.num_cols);
   }
-  /* initialize all the cache blocks in the cache */
-  printf("numrows: %d and numcols: %d\n", num_rows, num_cols);
-  for (x = 0; x < num_rows; x++) {
-    for(y = 0; y < num_cols; y++) {
+  /* initialize all the cache blocks in the icache */
+  //printf("numrows: %d and numcols: %d\n", icache_setup.num_rows, icache_setup.num_cols);
+  for (x = 0; x < icache_setup.num_rows; x++) {
+    for(y = 0; y < icache_setup.num_cols; y++) {
       icache[x][y].valid_bit = 0;
-      icache[x][y].dirty_bit = 0;
       icache[x][y].LRU_age = 0;
     }
   }
-  if(icache_info.replacement == Replacement_RANDOM) {
+  if(dcache_info[0].num_blocks != 0)
+  {
+    setup_cache(dcache_info[0], &dcache_setup[0]);
+    /* Allocate memory for d-cache array */
+    dcache = calloc(sizeof(void*), dcache_setup[0].num_rows);
+    for (x = 0; x < dcache_setup[0].num_rows; x++)
+    {
+      dcache[x] = calloc(sizeof(CacheBlock), dcache_setup[0].num_cols);
+    }
+    /* initialize all the cache blocks in the dcache */
+    //printf("numrows: %d and numcols: %d\n", icache_setup.num_rows, icache_setup.num_cols);
+    for (x = 0; x < dcache_setup[0].num_rows; x++) {
+      for(y = 0; y < dcache_setup[0].num_cols; y++) {
+        dcache[x][y].valid_bit = 0;
+        dcache[x][y].dirty_bit = 0;
+        dcache[x][y].LRU_age = 0;
+      }
+    }
+    if(dcache_info[1].num_blocks != 0)
+    {
+      setup_cache(dcache_info[1], &dcache_setup[1]);
+      /* Allocate memory for d-cache array */
+      dcache2 = calloc(sizeof(void*), dcache_setup[1].num_rows);
+      for (x = 0; x < dcache_setup[1].num_rows; x++)
+      {
+        dcache2[x] = calloc(sizeof(CacheBlock), dcache_setup[1].num_cols);
+      }
+      /* initialize all the cache blocks in the dcache */
+      //printf("numrows: %d and numcols: %d\n", icache_setup.num_rows, icache_setup.num_cols);
+      for (x = 0; x < dcache_setup[1].num_rows; x++) {
+        for(y = 0; y < dcache_setup[1].num_cols; y++) {
+          dcache2[x][y].valid_bit = 0;
+          dcache2[x][y].dirty_bit = 0;
+          dcache2[x][y].LRU_age = 0;
+        }
+      }
+    }
+    if(dcache_info[2].num_blocks != 0)
+    {
+      setup_cache(dcache_info[2], &dcache_setup[2]);
+      /* Allocate memory for d-cache array */
+      dcache3 = calloc(sizeof(void*), dcache_setup[2].num_rows);
+      for (x = 0; x < dcache_setup[2].num_rows; x++)
+      {
+        dcache3[x] = calloc(sizeof(CacheBlock), dcache_setup[2].num_cols);
+      }
+      /* initialize all the cache blocks in the dcache */
+      //printf("numrows: %d and numcols: %d\n", icache_setup.num_rows, icache_setup.num_cols);
+      for (x = 0; x < dcache_setup[2].num_rows; x++) {
+        for(y = 0; y < dcache_setup[2].num_cols; y++) {
+          dcache3[x][y].valid_bit = 0;
+          dcache3[x][y].dirty_bit = 0;
+          dcache3[x][y].LRU_age = 0;
+        }
+      }
+    }
+  }
     /* Intializes random number generator */
     srand(1000);
     //srand((unsigned int)time(NULL));
-  }
-
 	/* This call to dump_cache_info is just to show some debugging information
 	and you may remove it. */
-	dump_cache_info();
+	//dump_cache_info();
 }
 void accessI(addr_t address){
 	/* Picking apart the address */
-	word_index = (address >> word_shift) & word_mask;
-	row_index = (address >> row_shift) & row_mask;
-	tag = (address >> tag_shift) & tag_mask;
-  printf("row index: %d\ntag: %d\n", row_index, tag);
+	word_index_I = (address >> icache_setup.word_shift) & icache_setup.word_mask;
+	row_index_I = (address >> icache_setup.row_shift) & icache_setup.row_mask;
+	tag_I = (address >> icache_setup.tag_shift) & icache_setup.tag_mask;
+  //printf("row index: %d\ntag_I: %d\n", row_index_I, tag_I);
 
-	num_reads++;
-  col_index = 0;
+	icache_stats.num_reads++;
+  col_index_I = 0;
   while(1)
   {
-    if(icache[row_index][col_index].valid_bit == 1)
+    if(icache[row_index_I][col_index_I].valid_bit == 1)
     {
-      if(icache[row_index][col_index].tag == tag)
+      if(icache[row_index_I][col_index_I].tag == tag_I)
       {
         /*hit*/
-        updateAge(col_index);
+        updateAge(col_index_I);
         break;
       }
       else if(icache_info.associativity == 1)
     	{
-    		conflict_reads++;
-    		words_read_mem += icache_info.words_per_block;
-    		icache[row_index][col_index].tag = tag;
+        /*conflict miss*/
+    		icache_stats.conflict_reads++;
+    		icache_stats.words_read_mem += icache_info.words_per_block;
+    		icache[row_index_I][col_index_I].tag = tag_I;
         break;
     	}
-      else if(col_index == num_cols-1)
+      else if(col_index_I == icache_setup.num_cols-1)
       {
         /* Reached the end of the row and need to kick out a block*/
-        capacity_reads++;
-        words_read_mem += icache_info.words_per_block;
+        icache_stats.capacity_reads++;
+        icache_stats.words_read_mem += icache_info.words_per_block;
         if(icache_info.replacement == Replacement_RANDOM)
         {
-          icache[row_index][rand() % num_cols].tag = tag;
+          /* Randomly replace a block in the row */
+          icache[row_index_I][rand() % icache_setup.num_cols].tag = tag_I;
         }
         else
         {
           int j;
-          int oldest = icache[row_index][0].LRU_age;
+          int oldest = icache[row_index_I][0].LRU_age;
           int oldest_index = 0;
-          for(j = 1; j < num_cols; j++)
+          /* Find oldest cache block */
+          for(j = 1; j < icache_setup.num_cols; j++)
           {
-            if(icache[row_index][j].LRU_age > oldest) {
-              oldest = icache[row_index][j].LRU_age;
+            if(icache[row_index_I][j].LRU_age > oldest) {
+              oldest = icache[row_index_I][j].LRU_age;
               oldest_index = j;
             }
           }
-          icache[row_index][oldest_index].tag = tag;
+          /* Replace the LRU cache block with new data */
+          icache[row_index_I][oldest_index].tag = tag_I;
           updateAge(oldest_index);
         }
         break;
       }
       else
       {
-        /* keep looking*/
-        col_index++;
+        /* keep looking through row*/
+        col_index_I++;
       }
     }
     else
   	{
-  		compulsory_reads++;
-  		words_read_mem += icache_info.words_per_block;
-  		icache[row_index][col_index].valid_bit = 1;
-  		icache[row_index][col_index].tag = tag;
-      updateAge(col_index);
+      /* Compulsory miss - Cache slot used to be empty */
+  		icache_stats.compulsory_reads++;
+  		icache_stats.words_read_mem += icache_info.words_per_block;
+  		icache[row_index_I][col_index_I].valid_bit = 1;
+  		icache[row_index_I][col_index_I].tag = tag_I;
+      updateAge(col_index_I);
       break;
   	}
 
   }
+}
+void accessD_Read(addr_t address, int level, CacheBlock** cache){
+	/* Picking apart the address */
+	word_index_D[level] = (address >> dcache_setup[level].word_shift) & dcache_setup[level].word_mask;
+	row_index_D[level] = (address >> dcache_setup[level].row_shift) & dcache_setup[level].row_mask;
+	tag_D[level] = (address >> dcache_setup[level].tag_shift) & dcache_setup[level].tag_mask;
+  //printf("row index: %d\ntag_I: %d\n", row_index_I, tag_I);
 
+	dcache_stats[level].num_reads++;
+  col_index_D[level] = 0;
+  while(1)
+  {
+    if(cache[row_index_D[level]][col_index_D[level]].valid_bit == 1)
+    {
+      if(cache[row_index_D[level]][col_index_D[level]].tag == tag_D[level])
+      {
+        /*hit*/
+        updateAgeD(col_index_D[level], level, cache);
+        break;
+      }
+      else if(dcache_info[level].associativity == 1)
+    	{
+        dcache_stats[level].conflict_reads++;
+        if(cache[row_index_D[level]][col_index_D[level]].dirty_bit == 1)
+        {
+          /* write previous data in cache block to memory */
+          dcache_stats[level].words_write_mem += dcache_info[level].words_per_block;
+          if(level == 0 && dcache_info[1].num_blocks != 0) {
+            accessD_Write(address, 1, dcache2);
+          }
+          if(level == 1 && dcache_info[2].num_blocks != 0) {
+            accessD_Write(address, 2, dcache3);
+          }
+        }
+    		dcache_stats[level].words_read_mem += dcache_info[level].words_per_block;
+    		cache[row_index_D[level]][col_index_D[level]].tag = tag_D[level];
+        cache[row_index_D[level]][col_index_D[level]].dirty_bit = 0;
+        if(level == 0 && dcache_info[1].num_blocks != 0) {
+          accessD_Read(address, 1, dcache2);
+        }
+        if(level == 1 && dcache_info[2].num_blocks != 0) {
+          accessD_Read(address, 2, dcache3);
+        }
+        break;
+    	}
+      else if(col_index_D[level] == dcache_setup[level].num_cols-1)
+      {
+        /* Reached the end of the row and need to kick out a block*/
+        dcache_stats[level].capacity_reads++;
+        dcache_stats[level].words_read_mem += dcache_info[level].words_per_block;
+        if(dcache_info[level].replacement == Replacement_RANDOM)
+        {
+          if(cache[row_index_D[level]][col_index_D[level]].dirty_bit == 1)
+          {
+            /* write previous data in cache block to memory */
+            dcache_stats[level].words_write_mem += dcache_info[level].words_per_block;
+            if(level == 0 && dcache_info[1].num_blocks != 0) {
+              accessD_Write(address, 1, dcache2);
+            }
+            if(level == 1 && dcache_info[2].num_blocks != 0) {
+              accessD_Write(address, 2, dcache3);
+            }
+          }
+          col_index_D[level] = rand() % dcache_setup[level].num_cols;
+          cache[row_index_D[level]][col_index_D[level]].tag = tag_D[level];
+          cache[row_index_D[level]][col_index_D[level]].dirty_bit = 0;
+        }
+        else
+        {
+          int j;
+          int oldest = cache[row_index_D[level]][level].LRU_age;
+          int oldest_index = 0;
+          /* Find oldest block to replace */
+          for(j = 1; j < dcache_setup[level].num_cols; j++)
+          {
+            if(cache[row_index_D[level]][j].LRU_age > oldest) {
+              oldest = dcache[row_index_D[level]][j].LRU_age;
+              oldest_index = j;
+            }
+          }
+          if(cache[row_index_D[level]][oldest_index].dirty_bit == 1)
+          {
+            /* write previous data in cache block to memory */
+            dcache_stats[level].words_write_mem += dcache_info[level].words_per_block;
+            if(level == 0 && dcache_info[1].num_blocks != 0) {
+              accessD_Write(address, 1, dcache2);
+            }
+            if(level == 1 && dcache_info[2].num_blocks != 0) {
+              accessD_Write(address, 2, dcache3);
+            }
+          }
+          cache[row_index_D[level]][oldest_index].tag = tag_D[level];
+          cache[row_index_D[level]][oldest_index].dirty_bit = 0;
+          updateAgeD(oldest_index, level, cache);
+        }
+        if(level == 0 && dcache_info[1].num_blocks != 0) {
+          accessD_Read(address, 1, dcache2);
+        }
+        if(level == 1 && dcache_info[2].num_blocks != 0) {
+          accessD_Read(address, 2, dcache3);
+        }
+        break;
+      }
+      else
+      {
+        /* keep looking*/
+        col_index_D[level]++;
+      }
+    }
+    else
+  	{
+  		dcache_stats[level].compulsory_reads++;
+  		dcache_stats[level].words_read_mem += dcache_info[level].words_per_block;
+  		cache[row_index_D[level]][col_index_D[level]].valid_bit = 1;
+  		cache[row_index_D[level]][col_index_D[level]].tag = tag_D[level];
+      updateAgeD(col_index_D[level], level, cache);
+      if(level == 0 && dcache_info[1].num_blocks != 0) {
+        accessD_Read(address, 1, dcache2);
+      }
+      if(level == 1 && dcache_info[2].num_blocks != 0) {
+        accessD_Read(address, 2, dcache3);
+      }
+      break;
+  	}
+  }
+}
+void accessD_Write(addr_t address, int level, CacheBlock** cache)
+{
+  /* Picking apart the address */
+	word_index_D[level] = (address >> dcache_setup[level].word_shift) & dcache_setup[level].word_mask;
+	row_index_D[level] = (address >> dcache_setup[level].row_shift) & dcache_setup[level].row_mask;
+	tag_D[level] = (address >> dcache_setup[level].tag_shift) & dcache_setup[level].tag_mask;
+
+  dcache_stats[level].num_writes++;
+  /* Write-through, write-no-allocate (aka write-around)*/
+  if(dcache_info[level].write_scheme == Write_WRITE_THROUGH && dcache_info[level].allocate_scheme == Allocate_NO_ALLOCATE)
+  {
+    dcache_stats[level].words_write_mem++;
+    if(level == 0 && dcache_info[1].num_blocks != 0) {
+      accessD_Write(address, 1, dcache2);
+    }
+    if(level == 1 && dcache_info[2].num_blocks != 0) {
+      accessD_Write(address, 2, dcache3);
+    }
+    col_index_D[level] = 0;
+    while(1)
+    {
+      if(cache[row_index_D[level]][col_index_D[level]].valid_bit == 1)
+      {
+        if(cache[row_index_D[level]][col_index_D[level]].tag == tag_D[level])
+        {
+          /*hit*/
+          /*data written through cache and memory*/
+          updateAgeD(col_index_D[level], level, cache);
+          break;
+        }
+        else if(dcache_info[level].associativity == 1)
+      	{
+      		dcache_stats[level].conflict_writes++;
+          break;
+      	}
+        else if(col_index_D[level] == dcache_setup[level].num_cols-1)
+        {
+          /* Reached the end of the row and need to kick out a block*/
+          dcache_stats[level].capacity_writes++;
+          break;
+        }
+        else
+        {
+          /* keep looking*/
+          col_index_D[level]++;
+        }
+      }
+      else
+    	{
+        if(dcache_info[level].associativity == 1)
+      	{
+      		dcache_stats[level].conflict_writes++;
+      	}
+        else
+        {
+          dcache_stats[level].capacity_writes++;
+        }
+        break;
+    	}
+    }
+  }
+  /* Write-through, write-allocate */
+  else if(dcache_info[level].write_scheme == Write_WRITE_THROUGH && dcache_info[level].allocate_scheme == Allocate_ALLOCATE )
+  {
+    col_index_D[level] = 0;
+    while(1)
+    {
+      if(cache[row_index_D[level]][col_index_D[level]].valid_bit == 1)
+      {
+        if(cache[row_index_D[level]][col_index_D[level]].tag == tag_D[level])
+        {
+          /*hit*/
+          updateAgeD(col_index_D[level], level, cache);
+          break;
+        }
+        else if(dcache_info[level].associativity == 1)
+      	{
+          if(dcache_info[level].words_per_block > 1) {
+            dcache_stats[level].words_read_mem += dcache_info[level].words_per_block;
+            if(level == 0 && dcache_info[1].num_blocks != 0) {
+              accessD_Read(address, 1, dcache2);
+            }
+            if(level == 1 && dcache_info[2].num_blocks != 0) {
+              accessD_Read(address, 2, dcache3);
+            }
+          }
+          cache[row_index_D[level]][col_index_D[level]].tag = tag_D[level];
+          dcache_stats[level].conflict_writes++;
+          break;
+      	}
+        else if(col_index_D[level] == dcache_setup[level].num_cols-1)
+        {
+          /* Reached the end of the row and need to kick out a block*/
+          dcache_stats[level].capacity_writes++;
+          if(dcache_info[level].words_per_block > 1) {
+            dcache_stats[level].words_read_mem += dcache_info[level].words_per_block;
+            if(level == 0 && dcache_info[1].num_blocks != 0) {
+              accessD_Read(address, 1, dcache2);
+            }
+            if(level == 1 && dcache_info[2].num_blocks != 0) {
+              accessD_Read(address, 2, dcache3);
+            }
+          }
+          if(dcache_info[level].replacement == Replacement_RANDOM)
+          {
+            cache[row_index_D[level]][rand() % dcache_setup[level].num_cols].tag = tag_D[level];
+          }
+          else
+          {
+            int j;
+            int oldest = cache[row_index_D[level]][level].LRU_age;
+            int oldest_index = 0;
+            for(j = 1; j < dcache_setup[level].num_cols; j++)
+            {
+              if(cache[row_index_D[level]][j].LRU_age > oldest) {
+                oldest = cache[row_index_D[level]][j].LRU_age;
+                oldest_index = j;
+              }
+            }
+            cache[row_index_D[level]][oldest_index].tag = tag_D[level];
+            updateAgeD(oldest_index, level, cache);
+          }
+          break;
+        }
+        else
+        {
+          /* keep looking*/
+          col_index_D[level]++;
+        }
+      }
+      else
+    	{
+        if(dcache_info[level].words_per_block > 1) {
+          dcache_stats[level].words_read_mem += dcache_info[level].words_per_block;
+          if(level == 0 && dcache_info[1].num_blocks != 0) {
+            accessD_Read(address, 1, dcache2);
+          }
+          if(level == 1 && dcache_info[2].num_blocks != 0) {
+            accessD_Read(address, 2, dcache3);
+          }
+        }
+        cache[row_index_D[level]][col_index_D[level]].valid_bit = 1;
+        cache[row_index_D[level]][col_index_D[level]].tag = tag_D[level];
+        dcache_stats[level].compulsory_writes++;
+        updateAgeD(col_index_D[level], level, cache);
+        break;
+    	}
+    }
+    dcache_stats[level].words_write_mem++;
+    if(level == 0 && dcache_info[1].num_blocks != 0) {
+      accessD_Write(address, 1, dcache2);
+    }
+    if(level == 1 && dcache_info[2].num_blocks != 0) {
+      accessD_Write(address, 2, dcache3);
+    }
+  }
+  /* Write Back and Write Allocate */
+  else if(dcache_info[level].write_scheme == Write_WRITE_BACK && dcache_info[level].allocate_scheme == Allocate_ALLOCATE )
+  {
+    col_index_D[level] = 0;
+    while(1)
+    {
+      if(cache[row_index_D[level]][col_index_D[level]].valid_bit == 1)
+      {
+        if(cache[row_index_D[level]][col_index_D[level]].tag == tag_D[level])
+        {
+          /*hit*/
+          /*update cache but not memory*/
+          updateAgeD(col_index_D[level], level, cache);
+          cache[row_index_D[level]][col_index_D[level]].dirty_bit = 1;
+          break;
+        }
+        else if(dcache_info[level].associativity == 1)
+      	{
+          /*conflict miss*/
+          if(cache[row_index_D[level]][col_index_D[level]].dirty_bit == 1)
+          {
+            /* write previous data in cache block to memory */
+            dcache_stats[level].words_write_mem += dcache_info[level].words_per_block;
+            if(level == 0 && dcache_info[1].num_blocks != 0) {
+              accessD_Write(address, 1, dcache2);
+            }
+            if(level == 1 && dcache_info[2].num_blocks != 0) {
+              accessD_Write(address, 2, dcache3);
+            }
+          }
+          /* read whole cache block from memory */
+          if(dcache_info[level].words_per_block > 1) {
+            dcache_stats[level].words_read_mem += dcache_info[level].words_per_block;
+            if(level == 0 && dcache_info[1].num_blocks != 0) {
+              accessD_Read(address, 1, dcache2);
+            }
+            if(level == 1 && dcache_info[2].num_blocks != 0) {
+              accessD_Read(address, 2, dcache3);
+            }
+          }
+          /* write new data to cache and update dirty bit*/
+          cache[row_index_D[level]][col_index_D[level]].tag = tag_D[level];
+          cache[row_index_D[level]][col_index_D[level]].dirty_bit = 1;
+          dcache_stats[level].conflict_writes++;
+          break;
+      	}
+        else if(col_index_D[level] == dcache_setup[level].num_cols-1)
+        {
+          /* Reached the end of the row and need to kick out a block*/
+          dcache_stats[level].capacity_writes++;
+          if(dcache_info[level].replacement == Replacement_RANDOM)
+          {
+            col_index_D[level] = rand() % dcache_setup[level].num_cols;
+            if(cache[row_index_D[level]][col_index_D[level]].dirty_bit == 1)
+            {
+              /* write previous data in cache block to memory */
+              dcache_stats[level].words_write_mem += dcache_info[level].words_per_block;
+              if(level == 0 && dcache_info[1].num_blocks != 0) {
+                accessD_Write(address, 1, dcache2);
+              }
+              if(level == 1 && dcache_info[2].num_blocks != 0) {
+                accessD_Write(address, 2, dcache3);
+              }
+            }
+            if(dcache_info[level].words_per_block > 1) {
+              dcache_stats[level].words_read_mem += dcache_info[level].words_per_block;
+              if(level == 0 && dcache_info[1].num_blocks != 0) {
+                accessD_Read(address, 1, dcache2);
+              }
+              if(level == 1 && dcache_info[2].num_blocks != 0) {
+                accessD_Read(address, 2, dcache3);
+              }
+            }
+            /* write new data to cache and update dirty bit*/
+            cache[row_index_D[level]][col_index_D[level]].tag = tag_D[level];
+            cache[row_index_D[level]][col_index_D[level]].dirty_bit = 1;
+          }
+          else
+          {
+            int j;
+            int oldest = cache[row_index_D[level]][0].LRU_age;
+            int oldest_index = 0;
+            /* Finds oldest cache block */
+            for(j = 1; j < dcache_setup[level].num_cols; j++)
+            {
+              if(cache[row_index_D[level]][j].LRU_age > oldest) {
+                oldest = cache[row_index_D[level]][j].LRU_age;
+                oldest_index = j;
+              }
+            }
+            if(cache[row_index_D[level]][oldest_index].dirty_bit == 1)
+            {
+              /* write previous data in cache block to memory */
+              dcache_stats[level].words_write_mem += dcache_info[0].words_per_block;
+              if(level == 0 && dcache_info[1].num_blocks != 0) {
+                accessD_Write(address, 1, dcache2);
+              }
+              if(level == 1 && dcache_info[2].num_blocks != 0) {
+                accessD_Write(address, 2, dcache3);
+              }
+            }
+            if(dcache_info[level].words_per_block > 1) {
+              dcache_stats[level].words_read_mem += dcache_info[level].words_per_block;
+              if(level == 0 && dcache_info[1].num_blocks != 0) {
+                accessD_Read(address, 1, dcache2);
+              }
+              if(level == 1 && dcache_info[2].num_blocks != 0) {
+                accessD_Read(address, 2, dcache3);
+              }
+            }
+            /* write new data to cache and update dirty bit*/
+            cache[row_index_D[level]][oldest_index].tag = tag_D[level];
+            cache[row_index_D[level]][oldest_index].dirty_bit = 1;
+            updateAgeD(oldest_index, level, cache);
+          }
+          break;
+        }
+        else
+        {
+          /* keep looking*/
+          col_index_D[level]++;
+        }
+      }
+      else
+    	{
+        cache[row_index_D[level]][col_index_D[level]].valid_bit = 1;
+        cache[row_index_D[level]][col_index_D[level]].tag = tag_D[level];
+        cache[row_index_D[level]][col_index_D[level]].dirty_bit = 1;
+        if(dcache_info[level].words_per_block > 1) {
+          dcache_stats[level].words_read_mem += dcache_info[level].words_per_block;
+          if(level == 0 && dcache_info[1].num_blocks != 0) {
+            accessD_Read(address, 1, dcache2);
+          }
+          if(level == 1 && dcache_info[2].num_blocks != 0) {
+            accessD_Read(address, 2, dcache3);
+          }
+        }
+        dcache_stats[level].compulsory_writes++;
+        updateAgeD(col_index_D[level], level, cache);
+        break;
+    	}
+    }
+  }
 }
 void handle_access(AccessType type, addr_t address)
 {
@@ -234,24 +736,78 @@ void handle_access(AccessType type, addr_t address)
 			break;
 		case Access_D_READ:
 			//printf("D_READ at %08lx\n", address);
+      if(dcache_info[0].num_blocks != 0)
+      {
+        accessD_Read(address, 0, dcache);
+      }
 			break;
 		case Access_D_WRITE:
 			//printf("D_WRITE at %08lx\n", address);
+      if(dcache_info[0].num_blocks != 0)
+      {
+        accessD_Write(address, 0, dcache);
+      }
 			break;
 	}
 }
-
+void print_stats_D(int level)
+{
+  dcache_stats[level].total_misses = dcache_stats[level].compulsory_reads + dcache_stats[level].conflict_reads + dcache_stats[level].capacity_reads;
+  dcache_stats[level].miss_rate = ((double)dcache_stats[level].total_misses / (double)dcache_stats[level].num_reads) * 100;
+  printf("\n\nL%d D-Cache statistics: \n", level+1);
+  printf("\tNumber of reads performed: %d\n\tWords read from memory: %d\n", dcache_stats[level].num_reads,dcache_stats[level].words_read_mem);
+  printf("\tNumber of writes performed: %d\n\tWords written to memory: %d\n", dcache_stats[level].num_writes, dcache_stats[level].words_write_mem);
+  printf("\tRead misses:\n\t\tCompulsory misses: %d", dcache_stats[level].compulsory_reads);
+  if(dcache_info[level].associativity == 1) {
+    printf("\n\t\tConflict misses: %d\n", dcache_stats[level].conflict_reads);
+  }
+  else{
+    printf("\n\t\tCapacity misses: %d\n", dcache_stats[level].capacity_reads);
+  }
+  printf("\t\tTotal read misses: %d\n\t\tMiss rate: %.2f%%\n", dcache_stats[level].total_misses, dcache_stats[level].miss_rate);
+  printf("\t\tTotal read misses (excluding compulsory): %d\n\t\tMiss rate: %.2f%%\n", (dcache_stats[level].total_misses - dcache_stats[level].compulsory_reads), (double)(dcache_stats[level].total_misses - dcache_stats[level].compulsory_reads)/(double)dcache_stats[level].num_reads*100);
+  printf("\tWrite misses:\n\t\tCompulsory misses: %d", dcache_stats[level].compulsory_writes);
+  if(dcache_info[level].associativity == 1) {
+    printf("\n\t\tConflict misses: %d\n", dcache_stats[level].conflict_writes);
+  }
+  else{
+    printf("\n\t\tCapacity misses: %d\n", dcache_stats[level].capacity_writes);
+  }
+  dcache_stats[level].total_misses = dcache_stats[level].compulsory_writes+dcache_stats[level].conflict_writes+dcache_stats[level].capacity_writes;
+  dcache_stats[level].miss_rate = ((double)dcache_stats[level].total_misses / (double)dcache_stats[level].num_writes) * 100;
+  printf("\t\tTotal write misses: %d\n\t\tMiss rate: %.2f%%\n", dcache_stats[level].total_misses, dcache_stats[level].miss_rate);
+  printf("\t\tTotal write misses (excluding compulsory): %d\n\t\tMiss rate: %.2f%%\n", (dcache_stats[level].conflict_writes+dcache_stats[level].capacity_writes), (double)(dcache_stats[level].conflict_writes+dcache_stats[level].capacity_writes)/(double)dcache_stats[level].num_writes*100);
+}
 void print_statistics()
 {
 	/* Finally, after all the simulation happens, you have to show what the
 	results look like. Do that here.*/
-	total_misses = compulsory_reads + conflict_reads + capacity_reads;
-	miss_rate = ((double)total_misses / (double)num_reads) * 100;
+  icache_stats.total_misses =  icache_stats.compulsory_reads + icache_stats.conflict_reads + icache_stats.capacity_reads;
+  icache_stats.miss_rate = ((double)icache_stats.total_misses / (double)icache_stats.num_reads) * 100;
 	printf("I-Cache statistics: \n");
-	printf("\tNumber of reads performed: %d\n\tWords read from memory: %d\n", num_reads,words_read_mem) ;
-	printf("\tCompulsory misses: %d\n\tConflict misses: %d\n\tCapacity misses: %d\n", compulsory_reads, conflict_reads, capacity_reads);
-	printf("\tTotal read misses: %d\n\tMiss rate: %.2f%%\n", total_misses, miss_rate);
-	printf("\tTotal read misses (excluding compulsory): %d\n\tMiss rate: %.2f%%\n", (total_misses- compulsory_reads), (double)(total_misses- compulsory_reads)/(double)num_reads*100);
+	printf("\tNumber of reads performed: %d\n\tWords read from memory: %d\n", icache_stats.num_reads,icache_stats.words_read_mem);
+	printf("\tRead misses:\n\t\tCompulsory misses: %d", icache_stats.compulsory_reads);
+  if(icache_info.associativity == 1) {
+    printf("\n\t\tConflict misses: %d\n", icache_stats.conflict_reads);
+  }
+  else{
+    printf("\n\t\tCapacity misses: %d\n", icache_stats.capacity_reads);
+  }
+	printf("\t\tTotal read misses: %d\n\t\tMiss rate: %.2f%%\n", icache_stats.total_misses, icache_stats.miss_rate);
+	printf("\t\tTotal read misses (excluding compulsory): %d\n\t\tMiss rate: %.2f%%\n", (icache_stats.conflict_reads + icache_stats.capacity_reads), (double)(icache_stats.conflict_reads + icache_stats.capacity_reads)/(double)icache_stats.num_reads*100);
+
+  if(dcache_info[0].num_blocks != 0)
+  {
+    print_stats_D(0);
+  }
+  if(dcache_info[1].num_blocks != 0)
+  {
+    print_stats_D(1);
+  }
+  if(dcache_info[2].num_blocks != 0)
+  {
+    print_stats_D(2);
+  }
 }
 
 /*******************************************************************************
@@ -404,7 +960,7 @@ FILE* parse_arguments(int argc, char** argv)
 				bad_params("Invalid D-cache parameters.");
 
 			if(level < 1 || level > 3)
-				bad_params("Inalid D-cache level.");
+				bad_params("Invalid D-cache level.");
 
 			level--;
 			if(have_data[level])
