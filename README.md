@@ -1,4 +1,4 @@
-# COE_1541
+# Cache Simulator
 ## Computer architecture 
 Spring 2017 
 Creating a Cache Simulator
