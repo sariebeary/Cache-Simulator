@@ -3,18 +3,18 @@ Computer architecture
 Spring 2017 
 
 Projects and such 
-#CS/COE 1501 Project 4
+# CS/COE 1501 Project 4
 
-##Goal:
+## Goal:
 To gain a better understanding of graphs and graph algorithms through practical implementation.
 
-##High-level description:
+## High-level description:
 You will be designing and implementing a simple information program for a fictional airline.
 Your program should be designed to be accessed by employees of the company.
 Through your program, they will be able to issue queries about the prices and distances of all of the routes offered by the company.
 Your program should operate via a menu-driven console interface (no GUI).
 
-##Specifications:
+## Specifications:
 1. At the start of your program, the user should be prompted for a filename containing all of the routes offered by the airline. Two example files are provided for you:  airline_data1.txt and airline_data2.txt.  Route files should contain:  the number of cities serviced by your airline, the names of each of those cities, and a list of routes between cities.  A route between cities should be presented as the numbers of the two cities (as they appear in the file starting from 1), the distance between the two cities, and the cost of flying on that route.
 1. You must represent the graph as an adjacency list. The cities should minimally have a string for a name and any other information you want to add. The data should be input from the routes file specified by the user. The edges will have multiple values (distance, price) and can be implemented as either a single list of edges with two values each, or as two separate lists of edges, one for each value. Note that this means edges in your graph will have multiple weights. You can assume that all of the listed routes are bi-directional (i.e., the that airline offers flights in both directions for the same price).
 1. With the route list loaded, your program should be able to answer the following queries:
@@ -30,7 +30,7 @@ Your program should operate via a menu-driven console interface (no GUI).
 	1. Quit the program. Before quitting, your routes should be saved back to the file (the same file and format that they were read in from, but containing the possibly modified route information).
 1. You must use the algorithms and implementations discussed in class for your queries. For example, to obtain the MST you must use either Prim’s or Kruskal’s algorithm and for the shortest distance and shortest price paths you must use Dijkstra’s algorithm. To obtain the shortest hops path you must use breadth-first search.
 
-##Submission Guidelines:
+## Submission Guidelines:
 * **DO NOT SUBMIT** any IDE package files.
 * You must name the primary driver for your program Airline.java.
 * You must be able to compile your program by running "javac Airline.java".
@@ -38,11 +38,11 @@ Your program should operate via a menu-driven console interface (no GUI).
 * You must fill out info_sheet.txt.
 * Be sure to remember to push the latest copy of your code back to your GitHub repository before the the assignment is due.  At the deadline, the repositories will automatically be copied for grading.  Whatever is present in your GitHub repository at that time will be considered your submission for this assignment.
 
-##Additional Notes/Hints:
+## Additional Notes/Hints:
 * A sample output file is provided for you in sample_output.txt.  This file provides an example of two runs of the program, one for each input file.
 * Though code for the algorithms used in the assignment has been provided by the authors of your text book, note that use of this code will require extensive adaptations to account for the two weights of each edge in the graph.
 
-##Grading Rubric
+## Grading Rubric
 *  Adjacency list representation is used:  10
 *  Data file I/O works as specified:  5
 *  Menu interface is user-friendly:  10
