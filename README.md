@@ -1,6 +1,7 @@
 # Cache Simulator
-## Computer architecture 
-Spring 2017 
+## Computer Architecture Spring 2017 
+*By Sarah Bednar*
+
 Creating a Cache Simulator
 https://github.com/CS1541-2174/cs1541_2174/wiki/Project-1
 
